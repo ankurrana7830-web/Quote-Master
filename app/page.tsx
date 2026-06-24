@@ -2,7 +2,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { supabase } from "../utils/supabase";
 import { useRouter } from "next/navigation";
-// Naya Tool: Charts ke liye
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function Dashboard() {
@@ -10,6 +9,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [totalQuotes, setTotalQuotes] = useState(0);
   const [uniqueClients, setUniqueClients] = useState(0);
+  const [totalRevenue, setTotalRevenue] = useState(0);
   const router = useRouter();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [type, setType] = useState("");
   const [requirement, setRequirement] = useState("");
   const [contactPerson, setContactPerson] = useState("");
+  const [revenue, setRevenue] = useState("");
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
@@ -28,6 +29,7 @@ export default function Dashboard() {
   const [editQuoteStatus, setEditQuoteStatus] = useState("");
   const [editDealStatus, setEditDealStatus] = useState("");
   const [editRemarks, setEditRemarks] = useState("");
+  const [editRevenue, setEditRevenue] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -50,17 +52,49 @@ export default function Dashboard() {
       setTotalQuotes(reversedData.length);
       const clients = new Set(reversedData.map(item => item['Company/Client Name']));
       setUniqueClients(clients.size);
+      
+      const calculatedRevenue = reversedData.reduce((sum, row) => sum + (Number(row['Revenue']) || 0), 0);
+      setTotalRevenue(calculatedRevenue);
     }
     setLoading(false);
   }
 
-  useEffect(() => {
-    checkSecurityAndFetchData();
-  }, [router]);
+  useEffect(() => { checkSecurityAndFetchData(); }, [router]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
+  };
+
+  // 📥 NAYA FUNCTION: Data ko CSV/Excel mein Download Karne ke liye
+  const exportToCSV = () => {
+    if (data.length === 0) {
+      alert("Koi data nahi hai download karne ke liye!");
+      return;
+    }
+    
+    const headers = Object.keys(data[0]);
+    const csvRows = [];
+    csvRows.push(headers.join(','));
+
+    for (const row of data) {
+      const values = headers.map(header => {
+        const escaped = ('' + (row[header] || '')).replace(/"/g, '\\"');
+        return `"${escaped}"`;
+      });
+      csvRows.push(values.join(','));
+    }
+
+    const csvString = csvRows.join('\n');
+    const blob = new Blob([csvString], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('hidden', '');
+    a.setAttribute('href', url);
+    a.setAttribute('download', `Sales_Data_${new Date().toLocaleDateString()}.csv`);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -82,20 +116,17 @@ export default function Dashboard() {
         "Requirement": requirement,
         "Company Contact Person": contactPerson,
         "Quote Requested Date": date.toLocaleDateString('en-US'),
-        "Quote Status": "Quote Shared"
+        "Quote Status": "Quote Shared",
+        "Revenue": Number(revenue) || 0 
       }]);
 
       if (error) throw error;
       setMessage(`✅ Lead Added! Code: ${quoteCode}`);
       await checkSecurityAndFetchData();
       
-      setClientName(""); setEmailSubject(""); setType(""); setRequirement(""); setContactPerson("");
+      setClientName(""); setEmailSubject(""); setType(""); setRequirement(""); setContactPerson(""); setRevenue("");
       setTimeout(() => { setIsModalOpen(false); setMessage(""); }, 1500);
-    } catch (error: any) {
-      setMessage(`❌ Error: ${error.message}`);
-    } finally {
-      setFormLoading(false);
-    }
+    } catch (error: any) { setMessage(`❌ Error: ${error.message}`); } finally { setFormLoading(false); }
   };
 
   const openEditModal = (row: any) => {
@@ -103,6 +134,7 @@ export default function Dashboard() {
     setEditQuoteStatus(row['Quote Status'] || "");
     setEditDealStatus(row['Deal Status'] || "");
     setEditRemarks(row['Additional Remarks'] || "");
+    setEditRevenue(row['Revenue'] || ""); 
     setEditMessage("");
     setIsEditModalOpen(true);
   };
@@ -113,49 +145,28 @@ export default function Dashboard() {
     setEditMessage("");
 
     try {
-      const { error } = await supabase
-        .from("Quote_Master_2026")
-        .update({
+      const { error } = await supabase.from("Quote_Master_2026").update({
           "Quote Status": editQuoteStatus,
           "Deal Status": editDealStatus,
-          "Additional Remarks": editRemarks
-        })
-        .eq("Quote code", editingCode);
+          "Additional Remarks": editRemarks,
+          "Revenue": Number(editRevenue) || 0 
+        }).eq("Quote code", editingCode);
 
       if (error) throw error;
-
       setEditMessage("✅ Record Updated!");
       await checkSecurityAndFetchData(); 
       setTimeout(() => { setIsEditModalOpen(false); setEditMessage(""); }, 1500);
-    } catch (error: any) {
-      setEditMessage(`❌ Error: ${error.message}`);
-    } finally {
-      setEditLoading(false);
-    }
+    } catch (error: any) { setEditMessage(`❌ Error: ${error.message}`); } finally { setEditLoading(false); }
   };
 
-  // --- 📊 CHART DATA CALCULATION ---
   const chartData = useMemo(() => {
-    const statusCounts: Record<string, number> = {
-      "Won": 0,
-      "Lost": 0,
-      "Hold": 0,
-      "Pending": 0
-    };
-
+    const statusCounts: Record<string, number> = { "Won": 0, "Lost": 0, "Hold": 0, "Pending": 0 };
     data.forEach((row) => {
       const status = row['Deal Status'] || "Pending";
-      if (statusCounts[status] !== undefined) {
-        statusCounts[status] += 1;
-      } else {
-        statusCounts["Pending"] += 1;
-      }
+      if (statusCounts[status] !== undefined) statusCounts[status] += 1;
+      else statusCounts["Pending"] += 1;
     });
-
-    return Object.keys(statusCounts).map(key => ({
-      name: key,
-      Quotes: statusCounts[key]
-    }));
+    return Object.keys(statusCounts).map(key => ({ name: key, Quotes: statusCounts[key] }));
   }, [data]);
 
   const filteredData = data.filter((row) => {
@@ -168,37 +179,41 @@ export default function Dashboard() {
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const paginatedData = filteredData.slice(startIndex, startIndex + itemsPerPage);
-
   useEffect(() => { setCurrentPage(1); }, [searchTerm]);
 
   return (
     <div style={{ padding: "40px", fontFamily: "sans-serif", backgroundColor: "#f3f4f6", minHeight: "100vh", position: "relative" }}>
       <div style={{ maxWidth: "1200px", margin: "0 auto" }}>
         
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px", flexWrap: "wrap", gap: "15px" }}>
           <h1 style={{ fontSize: "28px", fontWeight: "bold", color: "#111827", margin: 0 }}>🚀 Sales Intelligence Core</h1>
-          <div style={{ display: "flex", gap: "10px" }}>
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            {/* 📥 NAYA BUTTON: Export CSV */}
+            <button onClick={exportToCSV} style={{ backgroundColor: "#3b82f6", color: "white", padding: "10px 20px", border: "none", borderRadius: "6px", fontWeight: "bold", cursor: "pointer", display: "flex", alignItems: "center", gap: "5px" }}>
+              📥 Download CSV
+            </button>
             <button onClick={() => setIsModalOpen(true)} style={{ backgroundColor: "#10b981", color: "white", padding: "10px 20px", border: "none", borderRadius: "6px", fontWeight: "bold", cursor: "pointer" }}>+ Add New Quote</button>
             <button onClick={handleLogout} style={{ backgroundColor: "#ef4444", color: "white", padding: "10px 20px", border: "none", borderRadius: "6px", fontWeight: "bold", cursor: "pointer" }}>Logout</button>
           </div>
         </div>
         
-        {loading ? (
-          <p style={{ color: "#6b7280" }}>Data load ho raha hai...</p>
-        ) : (
+        {loading ? ( <p style={{ color: "#6b7280" }}>Data load ho raha hai...</p> ) : (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "20px", marginBottom: "30px" }}>
               <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "10px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", borderLeft: "4px solid #3b82f6" }}>
                 <p style={{ color: "#6b7280", fontSize: "14px", fontWeight: "600", marginBottom: "5px", textTransform: "uppercase" }}>Total Quotes</p>
                 <h2 style={{ fontSize: "32px", fontWeight: "bold", color: "#111827", margin: 0 }}>{totalQuotes}</h2>
               </div>
-              <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "10px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", borderLeft: "4px solid #10b981" }}>
+              <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "10px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", borderLeft: "4px solid #8b5cf6" }}>
                 <p style={{ color: "#6b7280", fontSize: "14px", fontWeight: "600", marginBottom: "5px", textTransform: "uppercase" }}>Unique Clients</p>
                 <h2 style={{ fontSize: "32px", fontWeight: "bold", color: "#111827", margin: 0 }}>{uniqueClients}</h2>
               </div>
+              <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "10px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", borderLeft: "4px solid #10b981" }}>
+                <p style={{ color: "#6b7280", fontSize: "14px", fontWeight: "600", marginBottom: "5px", textTransform: "uppercase" }}>Total Revenue</p>
+                <h2 style={{ fontSize: "32px", fontWeight: "bold", color: "#111827", margin: 0 }}>₹ {totalRevenue.toLocaleString("en-IN")}</h2>
+              </div>
             </div>
 
-            {/* --- 📊 VISUAL ANALYTICS (CHART SECTION) --- */}
             <div style={{ backgroundColor: "white", padding: "25px", borderRadius: "10px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", marginBottom: "30px" }}>
               <p style={{ marginBottom: "20px", color: "#374151", fontWeight: "bold", fontSize: "18px" }}>📊 Deal Status Overview</p>
               <div style={{ height: "300px", width: "100%" }}>
@@ -226,6 +241,7 @@ export default function Dashboard() {
                     <tr style={{ backgroundColor: "#f9fafb", color: "#374151" }}>
                       <th style={{ padding: "12px 15px", borderBottom: "2px solid #e5e7eb" }}>Quote Code</th>
                       <th style={{ padding: "12px 15px", borderBottom: "2px solid #e5e7eb" }}>Client Name</th>
+                      <th style={{ padding: "12px 15px", borderBottom: "2px solid #e5e7eb" }}>Revenue</th>
                       <th style={{ padding: "12px 15px", borderBottom: "2px solid #e5e7eb" }}>Status</th>
                       <th style={{ padding: "12px 15px", borderBottom: "2px solid #e5e7eb" }}>Action</th>
                     </tr>
@@ -236,6 +252,7 @@ export default function Dashboard() {
                         <tr key={index} style={{ borderBottom: "1px solid #f3f4f6" }}>
                           <td style={{ padding: "12px 15px", color: "#4b5563", fontWeight: "bold" }}>{row['Quote code']}</td>
                           <td style={{ padding: "12px 15px", color: "#111827", fontWeight: "500" }}>{row['Company/Client Name']}</td>
+                          <td style={{ padding: "12px 15px", color: "#10b981", fontWeight: "bold" }}>₹{row['Revenue'] || 0}</td>
                           <td style={{ padding: "12px 15px" }}>
                             <span style={{ backgroundColor: row['Deal Status'] === 'Won' ? '#d1fae5' : row['Deal Status'] === 'Lost' ? '#fee2e2' : '#f3f4f6', color: row['Deal Status'] === 'Won' ? '#065f46' : row['Deal Status'] === 'Lost' ? '#dc2626' : '#4b5563', padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: "bold" }}>
                               {row['Deal Status'] || "Pending"}
@@ -246,9 +263,7 @@ export default function Dashboard() {
                           </td>
                         </tr>
                       ))
-                    ) : (
-                      <tr><td colSpan={4} style={{ textAlign: "center", padding: "20px", color: "#6b7280" }}>Koi record nahi mila...</td></tr>
-                    )}
+                    ) : ( <tr><td colSpan={5} style={{ textAlign: "center", padding: "20px", color: "#6b7280" }}>Koi record nahi mila...</td></tr> )}
                   </tbody>
                 </table>
               </div>
@@ -275,6 +290,7 @@ export default function Dashboard() {
             <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
               <input type="text" placeholder="Client Name *" value={clientName} onChange={(e) => setClientName(e.target.value)} required style={{ padding: "10px", border: "1px solid #ccc", borderRadius: "5px" }} />
               <input type="text" placeholder="Email Subject" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} style={{ padding: "10px", border: "1px solid #ccc", borderRadius: "5px" }} />
+              <input type="number" placeholder="Expected Revenue (₹)" value={revenue} onChange={(e) => setRevenue(e.target.value)} style={{ padding: "10px", border: "1px solid #ccc", borderRadius: "5px" }} />
               <button type="submit" disabled={formLoading} style={{ padding: "12px", backgroundColor: "#3b82f6", color: "white", border: "none", borderRadius: "5px", cursor: "pointer" }}>Submit</button>
             </form>
           </div>
@@ -292,28 +308,10 @@ export default function Dashboard() {
             {editMessage && <div style={{ padding: "12px", borderRadius: "6px", marginBottom: "20px", fontWeight: "bold", backgroundColor: editMessage.includes("✅") ? "#d1fae5" : "#fee2e2", color: editMessage.includes("✅") ? "#065f46" : "#dc2626" }}>{editMessage}</div>}
 
             <form onSubmit={handleUpdate} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
-              <div>
-                <label style={{ display: "block", marginBottom: "5px", fontWeight: "500", fontSize: "14px" }}>Quote Status</label>
-                <select value={editQuoteStatus} onChange={(e) => setEditQuoteStatus(e.target.value)} style={{ width: "100%", padding: "10px", border: "1px solid #d1d5db", borderRadius: "6px" }}>
-                  <option value="">Select...</option>
-                  <option value="Pending">Pending</option>
-                  <option value="Quote Shared">Quote Shared</option>
-                  <option value="Negotiation">Negotiation</option>
-                </select>
-              </div>
-              <div>
-                <label style={{ display: "block", marginBottom: "5px", fontWeight: "500", fontSize: "14px" }}>Deal Status</label>
-                <select value={editDealStatus} onChange={(e) => setEditDealStatus(e.target.value)} style={{ width: "100%", padding: "10px", border: "1px solid #d1d5db", borderRadius: "6px" }}>
-                  <option value="">Select...</option>
-                  <option value="Won">Won</option>
-                  <option value="Lost">Lost</option>
-                  <option value="Hold">Hold</option>
-                </select>
-              </div>
-              <div>
-                <label style={{ display: "block", marginBottom: "5px", fontWeight: "500", fontSize: "14px" }}>Additional Remarks</label>
-                <textarea value={editRemarks} onChange={(e) => setEditRemarks(e.target.value)} rows={3} placeholder="Type any remarks or updates here..." style={{ width: "100%", padding: "10px", border: "1px solid #d1d5db", borderRadius: "6px", boxSizing: "border-box", resize: "vertical" }} />
-              </div>
+              <select value={editQuoteStatus} onChange={(e) => setEditQuoteStatus(e.target.value)} style={{ padding: "10px", border: "1px solid #d1d5db", borderRadius: "6px" }}><option value="">Quote Status...</option><option value="Pending">Pending</option><option value="Quote Shared">Quote Shared</option><option value="Negotiation">Negotiation</option></select>
+              <select value={editDealStatus} onChange={(e) => setEditDealStatus(e.target.value)} style={{ padding: "10px", border: "1px solid #d1d5db", borderRadius: "6px" }}><option value="">Deal Status...</option><option value="Won">Won</option><option value="Lost">Lost</option><option value="Hold">Hold</option></select>
+              <input type="number" placeholder="Final Revenue (₹)" value={editRevenue} onChange={(e) => setEditRevenue(e.target.value)} style={{ padding: "10px", border: "1px solid #d1d5db", borderRadius: "6px" }} />
+              <textarea value={editRemarks} onChange={(e) => setEditRemarks(e.target.value)} rows={3} placeholder="Remarks..." style={{ padding: "10px", border: "1px solid #d1d5db", borderRadius: "6px", resize: "vertical" }} />
               <button type="submit" disabled={editLoading} style={{ backgroundColor: "#10b981", color: "white", padding: "12px", border: "none", borderRadius: "6px", fontSize: "16px", fontWeight: "bold", cursor: editLoading ? "not-allowed" : "pointer", marginTop: "10px" }}>
                 {editLoading ? "Updating..." : "Save Updates"}
               </button>
